@@ -25,9 +25,12 @@ jobs:
           npm install
           npx playwright install --with-deps
 
+            - name: Create tests folder
+        run: mkdir -p tests
+
       - name: Download Generated Test
         run: |
-          curl -o tests/${{ github.event.inputs.filename }} \
+          curl -L -o tests/${{ github.event.inputs.filename }} \
           https://jira-ai-api.whiteground-14131a36.centralindia.azurecontainerapps.io/download/${{ github.event.inputs.filename }}
 
       - name: Run Playwright Test
