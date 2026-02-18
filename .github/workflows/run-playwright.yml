@@ -1,0 +1,35 @@
+name: Run Generated Playwright Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      filename:
+        description: "Generated Playwright test filename"
+        required: true
+
+jobs:
+  run-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          npm install
+          npx playwright install --with-deps
+
+      - name: Download Generated Test
+        run: |
+          curl -o tests/${{ github.event.inputs.filename }} \
+          https://jira-ai-api.whiteground-14131a36.centralindia.azurecontainerapps.io/download/${{ github.event.inputs.filename }}
+
+      - name: Run Playwright Test
+        run: |
+          npx playwright test tests/${{ github.event.inputs.filename }}
