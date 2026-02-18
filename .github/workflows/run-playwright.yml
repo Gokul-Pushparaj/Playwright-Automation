@@ -38,12 +38,12 @@ jobs:
           echo "Listing test directory:"
           ls -l tests
           echo "----- FILE CONTENT START -----"
-          cat tests/${{ github.event.inputs.filename }}
+          head -n 20 tests/${{ github.event.inputs.filename }}
           echo "----- FILE CONTENT END -----"
 
-      - name: Run Playwright Test
+      - name: Run Playwright Tests
         run: |
-          npx playwright test tests/${{ github.event.inputs.filename }}
+          npx playwright test
 
       - name: Upload Playwright Report
         if: always()
