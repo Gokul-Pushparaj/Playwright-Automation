@@ -1,35 +1,55 @@
-name: Playwright Tests
+name: Run Playwright Tests
 
 on:
   push:
     paths:
-      - 'testscripts/*.ts'
+      - 'testscripts/*.spec.ts'
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # REQUIRED for git diff
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm install
 
-      - run: npx playwright install --with-deps
+      - name: Install Playwright
+        run: npx playwright install --with-deps
 
-      - name: Get changed test file
-        id: changed-test
+      - name: Run Playwright tests
+        id: test_run
         run: |
-          FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep testscripts/ | head -n 1)
-          echo "FILE=$FILE" >> $GITHUB_OUTPUT
-          echo "Running test file: $FILE"
+          npx playwright test testscripts --reporter=json > result.json || true
 
-      - name: Run Playwright test
-        if: steps.changed-test.outputs.FILE != ''
+      - name: Extract Issue Key
+        id: extract
         run: |
-          npx playwright test ${{ steps.changed-test.outputs.FILE }}
+          ISSUE_KEY=$(ls testscripts/*.spec.ts | head -n 1 | grep -o 'SCRUM-[0-9]*')
+          echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+
+      - name: Post result to Jira
+        run: |
+          RESULT=$(cat result.json | jq -r '.stats.expected')
+          FAILED=$(cat result.json | jq -r '.stats.unexpected')
+
+          if [ "$FAILED" -gt 0 ]; then
+            STATUS="❌ FAILED"
+          else
+            STATUS="✅ PASSED"
+          fi
+
+          COMMENT="Automation Test Result: $STATUS\nPassed: $RESULT\nFailed: $FAILED\nGitHub Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -X POST \
+            -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data "{\"body\": \"$COMMENT\"}" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
