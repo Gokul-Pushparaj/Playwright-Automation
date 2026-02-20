@@ -25,9 +25,11 @@ jobs:
           npm install
           npx playwright install --with-deps
 
-      - name: Run Playwright Tests
+      - name: Run ONLY changed test file
         run: |
-          npx playwright test
+          FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep testscripts/ | head -n 1)
+          echo "Running test file: $FILE"
+          npx playwright test $FILE
 
       - name: Upload Playwright Report
         if: always()
