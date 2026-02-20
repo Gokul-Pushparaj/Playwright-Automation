@@ -10,35 +10,72 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      # --------------------------------------------------
+      # Checkout Code
+      # --------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # Setup Node
+      # --------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # --------------------------------------------------
+      # Install Dependencies
+      # --------------------------------------------------
       - name: Install dependencies
         run: npm install
 
-      - name: Install Playwright
+      - name: Install Playwright Browsers
         run: npx playwright install --with-deps
 
+      # --------------------------------------------------
+      # Run Tests (never fail pipeline immediately)
+      # --------------------------------------------------
       - name: Run Playwright tests
-        id: test_run
+        id: run_tests
         run: |
           npx playwright test testscripts --reporter=json > result.json || true
 
-      - name: Extract Issue Key
-        id: extract
-        run: |
-          ISSUE_KEY=$(ls testscripts/*.spec.ts | head -n 1 | grep -o 'SCRUM-[0-9]*')
-          echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+      # --------------------------------------------------
+      # Upload Test Artifacts
+      # --------------------------------------------------
+      - name: Upload Playwright Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            result.json
+            playwright-report/
+          if-no-files-found: ignore
 
-      - name: Post result to Jira
+      # --------------------------------------------------
+      # Extract Jira Issue Key from filename
+      # --------------------------------------------------
+      - name: Extract Issue Key
+        id: extract_issue
         run: |
-          RESULT=$(cat result.json | jq -r '.stats.expected')
-          FAILED=$(cat result.json | jq -r '.stats.unexpected')
+          ISSUE_KEY=$(ls testscripts/*.spec.ts | head -n 1 | grep -oE '[A-Z]+-[0-9]+')
+          echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+          echo "Detected Issue Key: $ISSUE_KEY"
+
+      # --------------------------------------------------
+      # Post Enterprise-Grade Comment to Jira (ADF format)
+      # --------------------------------------------------
+      - name: Post result to Jira
+        if: env.ISSUE_KEY != ''
+        run: |
+          echo "Parsing result.json..."
+
+          TOTAL=$(cat result.json | jq -r '.stats.total // 0')
+          PASSED=$(cat result.json | jq -r '.stats.passed // 0')
+          FAILED=$(cat result.json | jq -r '.stats.failed // 0')
+          SKIPPED=$(cat result.json | jq -r '.stats.skipped // 0')
+          DURATION=$(cat result.json | jq -r '.stats.duration // 0')
 
           if [ "$FAILED" -gt 0 ]; then
             STATUS="❌ FAILED"
@@ -46,10 +83,70 @@ jobs:
             STATUS="✅ PASSED"
           fi
 
-          COMMENT="Automation Test Result: $STATUS\nPassed: $RESULT\nFailed: $FAILED\nGitHub Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          echo "Posting results to Jira issue: $ISSUE_KEY"
 
           curl -X POST \
             -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            -H "Accept: application/json" \
             -H "Content-Type: application/json" \
-            --data "{\"body\": \"$COMMENT\"}" \
+            --data "{
+              \"body\": {
+                \"type\": \"doc\",
+                \"version\": 1,
+                \"content\": [
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {
+                        \"type\": \"text\",
+                        \"text\": \"🤖 AI Automation Test Result: $STATUS\"
+                      }
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Total: $TOTAL\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Passed: $PASSED\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Failed: $FAILED\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Skipped: $SKIPPED\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Execution Time (ms): $DURATION\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {
+                        \"type\": \"text\",
+                        \"text\": \"GitHub Run: $RUN_URL\"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }" \
             "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
+
+          echo "Jira comment posted successfully."
