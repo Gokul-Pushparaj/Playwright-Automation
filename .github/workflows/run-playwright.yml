@@ -1,11 +1,11 @@
 name: Run Generated Playwright Test
 
 on:
-  workflow_dispatch:
-    inputs:
-      filename:
-        description: "Generated Playwright test filename"
-        required: true
+  push:
+    branches:
+      - master
+    paths:
+      - 'testscripts/*.spec.ts'
 
 jobs:
   run-test:
@@ -24,22 +24,6 @@ jobs:
         run: |
           npm install
           npx playwright install --with-deps
-
-      - name: Create tests folder
-        run: mkdir -p tests
-
-      - name: Download Generated Test
-        run: |
-          curl -f -L -o tests/${{ github.event.inputs.filename }} \
-          https://jira-ai-api.whiteground-14131a36.centralindia.azurecontainerapps.io/download/${{ github.event.inputs.filename }}
-
-      - name: Debug downloaded file
-        run: |
-          echo "Listing test directory:"
-          ls -l tests
-          echo "----- FILE CONTENT START -----"
-          head -n 20 tests/${{ github.event.inputs.filename }}
-          echo "----- FILE CONTENT END -----"
 
       - name: Run Playwright Tests
         run: |
