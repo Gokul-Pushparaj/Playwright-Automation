@@ -1,4 +1,4 @@
-name: Run Playwright Tests
+name: Enterprise Playwright Automation
 
 on:
   push:
@@ -6,210 +6,206 @@ on:
       - 'testscripts/*.spec.ts'
 
 jobs:
+
   test:
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # --------------------------------------------------
-      # Checkout repository
-      # --------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    # --------------------------------
+    # Checkout
+    # --------------------------------
+    - uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Setup Node
-      # --------------------------------------------------
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
-      # --------------------------------------------------
-      # Install dependencies
-      # --------------------------------------------------
-      - name: Install dependencies
-        run: npm install
+    # --------------------------------
+    # Setup Node
+    # --------------------------------
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
 
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
 
-      # --------------------------------------------------
-      # Run Playwright Tests
-      # --------------------------------------------------
-      - name: Run Playwright tests
-        id: run_tests
-        run: |
-          echo "Running Playwright tests..."
-          npx playwright test testscripts --reporter=json > result.json || true
+    # --------------------------------
+    # Install dependencies
+    # --------------------------------
+    - name: Install dependencies
+      run: npm install
 
-          if [ ! -f result.json ]; then
-            echo '{"stats":{"total":0,"expected":0,"unexpected":0,"skipped":0,"duration":0}}' > result.json
-          fi
 
-          echo "Test execution completed."
+    # --------------------------------
+    # Install browsers
+    # --------------------------------
+    - name: Install Playwright Browsers
+      run: npx playwright install --with-deps
 
-      # --------------------------------------------------
-      # Upload Test Artifacts
-      # --------------------------------------------------
-      - name: Upload Playwright Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-results
-          path: |
-            result.json
-            playwright-report/
-          if-no-files-found: ignore
 
-      # --------------------------------------------------
-      # Extract Jira Issue Key
-      # --------------------------------------------------
-      - name: Extract Issue Key
-        id: extract_issue
-        run: |
-          ISSUE_KEY=$(ls testscripts/*.spec.ts | head -n 1 | grep -oE '[A-Z]+-[0-9]+')
-          echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
-          echo "Detected Issue Key: $ISSUE_KEY"
+    # --------------------------------
+    # Run tests
+    # --------------------------------
+    - name: Run Playwright tests
+      run: |
 
-      # --------------------------------------------------
-      # Parse Results (Enterprise-safe parsing)
-      # --------------------------------------------------
-      - name: Parse Test Results
-        id: parse
-        run: |
+        echo "Running Playwright tests..."
 
-          TOTAL=$(jq -r '.stats.total // 0' result.json)
-          PASSED=$(jq -r '.stats.expected // 0' result.json)
-          FAILED=$(jq -r '.stats.unexpected // 0' result.json)
-          SKIPPED=$(jq -r '.stats.skipped // 0' result.json)
-          DURATION=$(jq -r '.stats.duration // 0' result.json)
+        npx playwright test testscripts \
+          --reporter=json,html \
+          || true
 
-          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
-          echo "PASSED=$PASSED" >> $GITHUB_ENV
-          echo "FAILED=$FAILED" >> $GITHUB_ENV
-          echo "SKIPPED=$SKIPPED" >> $GITHUB_ENV
-          echo "DURATION=$DURATION" >> $GITHUB_ENV
+        if [ ! -f result.json ]; then
+          echo '{"stats":{"expected":0,"unexpected":0,"skipped":0,"flaky":0,"duration":0}}' > result.json
+        fi
 
-          # Enterprise status logic
-          if [ "$TOTAL" -eq 0 ]; then
-            STATUS="❌ FAILED (NO TESTS EXECUTED)"
-          elif [ "$FAILED" -gt 0 ]; then
-            STATUS="❌ FAILED"
-          else
-            STATUS="✅ PASSED"
-          fi
 
-          echo "STATUS=$STATUS" >> $GITHUB_ENV
+    # --------------------------------
+    # Upload artifacts (Screenshots, traces, report)
+    # --------------------------------
+    - name: Upload Test Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: playwright-artifacts
+        path: |
+          playwright-report/
+          test-results/
+          result.json
+        retention-days: 30
 
-          echo "Parsed results:"
-          echo "Total: $TOTAL"
-          echo "Passed: $PASSED"
-          echo "Failed: $FAILED"
-          echo "Skipped: $SKIPPED"
-          echo "Duration: $DURATION"
-          echo "Status: $STATUS"
 
-      # --------------------------------------------------
-      # Post Result to Jira (ADF format)
-      # --------------------------------------------------
-      - name: Post result to Jira
-        if: env.ISSUE_KEY != ''
-        run: |
+    # --------------------------------
+    # Extract Issue Key
+    # --------------------------------
+    - name: Extract Issue Key
+      run: |
 
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          COMMIT="${{ github.sha }}"
-          BRANCH="${{ github.ref_name }}"
-          ACTOR="${{ github.actor }}"
+        ISSUE_KEY=$(ls testscripts/*.spec.ts | head -n 1 | grep -oE '[A-Z]+-[0-9]+')
 
-          echo "Posting results to Jira issue: $ISSUE_KEY"
+        echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
 
-          curl -X POST \
-            -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            --data "{
-              \"body\": {
-                \"type\": \"doc\",
-                \"version\": 1,
+        echo "Issue Key: $ISSUE_KEY"
+
+
+    # --------------------------------
+    # Parse Results
+    # --------------------------------
+    - name: Parse Results
+      run: |
+
+        PASSED=$(jq -r '.stats.expected // 0' result.json)
+        FAILED=$(jq -r '.stats.unexpected // 0' result.json)
+        SKIPPED=$(jq -r '.stats.skipped // 0' result.json)
+        FLAKY=$(jq -r '.stats.flaky // 0' result.json)
+        DURATION=$(jq -r '.stats.duration // 0' result.json)
+
+        TOTAL=$((PASSED + FAILED + SKIPPED + FLAKY))
+
+        echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+        echo "PASSED=$PASSED" >> $GITHUB_ENV
+        echo "FAILED=$FAILED" >> $GITHUB_ENV
+        echo "SKIPPED=$SKIPPED" >> $GITHUB_ENV
+        echo "DURATION=$DURATION" >> $GITHUB_ENV
+
+        if [ "$TOTAL" -eq 0 ]; then
+          STATUS="❌ FAILED (NO TESTS)"
+        elif [ "$FAILED" -gt 0 ]; then
+          STATUS="❌ FAILED"
+        else
+          STATUS="✅ PASSED"
+        fi
+
+        echo "STATUS=$STATUS" >> $GITHUB_ENV
+
+
+    # --------------------------------
+    # Generate Artifact URL
+    # --------------------------------
+    - name: Generate Artifact URL
+      run: |
+
+        RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+        ARTIFACT_URL="$RUN_URL"
+
+        echo "RUN_URL=$RUN_URL" >> $GITHUB_ENV
+        echo "ARTIFACT_URL=$ARTIFACT_URL" >> $GITHUB_ENV
+
+
+    # --------------------------------
+    # Post to Jira (Enterprise format)
+    # --------------------------------
+    - name: Post Results to Jira
+      if: env.ISSUE_KEY != ''
+      run: |
+
+        curl -X POST \
+        -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+        -H "Accept: application/json" \
+        -H "Content-Type: application/json" \
+        --data "{
+
+          \"body\": {
+            \"type\": \"doc\",
+            \"version\": 1,
+            \"content\": [
+
+              {
+                \"type\": \"paragraph\",
                 \"content\": [
                   {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {
-                        \"type\": \"text\",
-                        \"text\": \"🤖 AI Automation Test Result: $STATUS\"
-                      }
-                    ]
-                  },
+                    \"type\": \"text\",
+                    \"text\": \"🤖 AI Automation Result: $STATUS\"
+                  }
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\":\"text\",\"text\":\"Total: $TOTAL\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\":\"text\",\"text\":\"Passed: $PASSED\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\":\"text\",\"text\":\"Failed: $FAILED\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\":\"text\",\"text\":\"Execution Time: $DURATION ms\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
                   {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Total: $TOTAL\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Passed: $PASSED\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Failed: $FAILED\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Skipped: $SKIPPED\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Execution Time (ms): $DURATION\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Branch: $BRANCH\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Commit: $COMMIT\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {\"type\": \"text\", \"text\": \"Triggered By: $ACTOR\"}
-                    ]
-                  },
-                  {
-                    \"type\": \"paragraph\",
-                    \"content\": [
-                      {
-                        \"type\": \"text\",
-                        \"text\": \"GitHub Run: $RUN_URL\"
-                      }
-                    ]
+                    \"type\":\"text\",
+                    \"text\":\"📊 View Full Report: $ARTIFACT_URL\"
                   }
                 ]
               }
-            }" \
-            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
 
-          echo "Jira comment posted successfully."
+            ]
+          }
 
-      # --------------------------------------------------
-      # Fail pipeline if tests failed
-      # --------------------------------------------------
-      - name: Fail workflow if tests failed
-        if: env.FAILED != '0' || env.TOTAL == '0'
-        run: |
-          echo "Tests failed or no tests executed."
-          exit 1
+        }" \
+        "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
+
+
+    # --------------------------------
+    # Fail workflow if failed
+    # --------------------------------
+    - name: Fail if tests failed
+      if: env.FAILED != '0' || env.TOTAL == '0'
+      run: exit 1
