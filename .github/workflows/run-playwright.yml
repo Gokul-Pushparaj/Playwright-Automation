@@ -14,15 +14,17 @@ jobs:
     steps:
 
     # --------------------------------
-    # Checkout
+    # Checkout repository
     # --------------------------------
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
 
     # --------------------------------
     # Setup Node
     # --------------------------------
-    - uses: actions/setup-node@v4
+    - name: Setup Node
+      uses: actions/setup-node@v4
       with:
         node-version: 20
 
@@ -35,23 +37,44 @@ jobs:
 
 
     # --------------------------------
-    # Install browsers
+    # Install Playwright browsers
     # --------------------------------
     - name: Install Playwright Browsers
       run: npx playwright install --with-deps
 
 
     # --------------------------------
-    # Run tests
+    # Detect latest generated test file
     # --------------------------------
-    - name: Run Playwright tests
+    - name: Detect latest test file
       run: |
 
-        echo "Running Playwright tests..."
+        LATEST_TEST=$(ls -t testscripts/*.spec.ts | head -1)
 
-        npx playwright test testscripts \
+        echo "LATEST_TEST=$LATEST_TEST" >> $GITHUB_ENV
+
+        FILE_NAME=$(basename "$LATEST_TEST")
+
+        ISSUE_KEY=$(echo "$FILE_NAME" | grep -oE '[A-Z]+-[0-9]+')
+
+        echo "FILE_NAME=$FILE_NAME" >> $GITHUB_ENV
+        echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+
+        echo "Latest test file: $FILE_NAME"
+        echo "Issue key: $ISSUE_KEY"
+
+
+    # --------------------------------
+    # Run ONLY latest test
+    # --------------------------------
+    - name: Run Playwright test (Latest only)
+      run: |
+
+        echo "Running test file: $LATEST_TEST"
+
+        npx playwright test "$LATEST_TEST" \
           --reporter=json,html \
-          || true
+          > result.json || true
 
         if [ ! -f result.json ]; then
           echo '{"stats":{"expected":0,"unexpected":0,"skipped":0,"flaky":0,"duration":0}}' > result.json
@@ -59,7 +82,7 @@ jobs:
 
 
     # --------------------------------
-    # Upload artifacts (Screenshots, traces, report)
+    # Upload artifacts
     # --------------------------------
     - name: Upload Test Artifacts
       uses: actions/upload-artifact@v4
@@ -70,19 +93,6 @@ jobs:
           test-results/
           result.json
         retention-days: 30
-
-
-    # --------------------------------
-    # Extract Issue Key
-    # --------------------------------
-    - name: Extract Issue Key
-      run: |
-
-        ISSUE_KEY=$(ls testscripts/*.spec.ts | head -n 1 | grep -oE '[A-Z]+-[0-9]+')
-
-        echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
-
-        echo "Issue Key: $ISSUE_KEY"
 
 
     # --------------------------------
@@ -106,7 +116,7 @@ jobs:
         echo "DURATION=$DURATION" >> $GITHUB_ENV
 
         if [ "$TOTAL" -eq 0 ]; then
-          STATUS="❌ FAILED (NO TESTS)"
+          STATUS="❌ FAILED (NO TESTS EXECUTED)"
         elif [ "$FAILED" -gt 0 ]; then
           STATUS="❌ FAILED"
         else
@@ -117,21 +127,18 @@ jobs:
 
 
     # --------------------------------
-    # Generate Artifact URL
+    # Generate report URLs
     # --------------------------------
-    - name: Generate Artifact URL
+    - name: Generate Report URLs
       run: |
 
         RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-        ARTIFACT_URL="$RUN_URL"
-
         echo "RUN_URL=$RUN_URL" >> $GITHUB_ENV
-        echo "ARTIFACT_URL=$ARTIFACT_URL" >> $GITHUB_ENV
 
 
     # --------------------------------
-    # Post to Jira (Enterprise format)
+    # Post Enterprise comment to Jira
     # --------------------------------
     - name: Post Results to Jira
       if: env.ISSUE_KEY != ''
@@ -144,16 +151,82 @@ jobs:
         --data "{
 
           \"body\": {
+
             \"type\": \"doc\",
             \"version\": 1,
+
             \"content\": [
+
+              {
+                \"type\": \"heading\",
+                \"attrs\": {\"level\": 3},
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"🤖 AI Automation Execution Report\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Issue: $ISSUE_KEY\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Test File: $FILE_NAME\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Execution Status: $STATUS\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Total Tests: $TOTAL\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Passed: $PASSED\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Failed: $FAILED\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Skipped: $SKIPPED\"}
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {\"type\": \"text\", \"text\": \"Execution Time: $DURATION ms\"}
+                ]
+              },
 
               {
                 \"type\": \"paragraph\",
                 \"content\": [
                   {
                     \"type\": \"text\",
-                    \"text\": \"🤖 AI Automation Result: $STATUS\"
+                    \"text\": \"📊 Full Execution Report: $RUN_URL\"
                   }
                 ]
               },
@@ -161,37 +234,9 @@ jobs:
               {
                 \"type\": \"paragraph\",
                 \"content\": [
-                  {\"type\":\"text\",\"text\":\"Total: $TOTAL\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Passed: $PASSED\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Failed: $FAILED\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Execution Time: $DURATION ms\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
                   {
-                    \"type\":\"text\",
-                    \"text\":\"📊 View Full Report: $ARTIFACT_URL\"
+                    \"type\": \"text\",
+                    \"text\": \"Generated by Enterprise AI Automation Framework\"
                   }
                 ]
               }
@@ -206,6 +251,6 @@ jobs:
     # --------------------------------
     # Fail workflow if failed
     # --------------------------------
-    - name: Fail if tests failed
+    - name: Fail workflow if tests failed
       if: env.FAILED != '0' || env.TOTAL == '0'
       run: exit 1
