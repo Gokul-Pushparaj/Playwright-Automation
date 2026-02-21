@@ -10,8 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # --------------------------------------------------
-      # Checkout Code
+      # Checkout repository
       # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,7 +26,7 @@ jobs:
           node-version: 20
 
       # --------------------------------------------------
-      # Install Dependencies
+      # Install dependencies
       # --------------------------------------------------
       - name: Install dependencies
         run: npm install
@@ -34,12 +35,19 @@ jobs:
         run: npx playwright install --with-deps
 
       # --------------------------------------------------
-      # Run Tests (never fail pipeline immediately)
+      # Run Playwright Tests
       # --------------------------------------------------
       - name: Run Playwright tests
         id: run_tests
         run: |
+          echo "Running Playwright tests..."
           npx playwright test testscripts --reporter=json > result.json || true
+
+          if [ ! -f result.json ]; then
+            echo '{"stats":{"total":0,"expected":0,"unexpected":0,"skipped":0,"duration":0}}' > result.json
+          fi
+
+          echo "Test execution completed."
 
       # --------------------------------------------------
       # Upload Test Artifacts
@@ -54,7 +62,7 @@ jobs:
           if-no-files-found: ignore
 
       # --------------------------------------------------
-      # Extract Jira Issue Key from filename
+      # Extract Jira Issue Key
       # --------------------------------------------------
       - name: Extract Issue Key
         id: extract_issue
@@ -64,26 +72,54 @@ jobs:
           echo "Detected Issue Key: $ISSUE_KEY"
 
       # --------------------------------------------------
-      # Post Enterprise-Grade Comment to Jira (ADF format)
+      # Parse Results (Enterprise-safe parsing)
       # --------------------------------------------------
-      - name: Post result to Jira
-        if: env.ISSUE_KEY != ''
+      - name: Parse Test Results
+        id: parse
         run: |
-          echo "Parsing result.json..."
 
-          TOTAL=$(cat result.json | jq -r '.stats.total // 0')
-          PASSED=$(cat result.json | jq -r '.stats.passed // 0')
-          FAILED=$(cat result.json | jq -r '.stats.failed // 0')
-          SKIPPED=$(cat result.json | jq -r '.stats.skipped // 0')
-          DURATION=$(cat result.json | jq -r '.stats.duration // 0')
+          TOTAL=$(jq -r '.stats.total // 0' result.json)
+          PASSED=$(jq -r '.stats.expected // 0' result.json)
+          FAILED=$(jq -r '.stats.unexpected // 0' result.json)
+          SKIPPED=$(jq -r '.stats.skipped // 0' result.json)
+          DURATION=$(jq -r '.stats.duration // 0' result.json)
 
-          if [ "$FAILED" -gt 0 ]; then
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "PASSED=$PASSED" >> $GITHUB_ENV
+          echo "FAILED=$FAILED" >> $GITHUB_ENV
+          echo "SKIPPED=$SKIPPED" >> $GITHUB_ENV
+          echo "DURATION=$DURATION" >> $GITHUB_ENV
+
+          # Enterprise status logic
+          if [ "$TOTAL" -eq 0 ]; then
+            STATUS="❌ FAILED (NO TESTS EXECUTED)"
+          elif [ "$FAILED" -gt 0 ]; then
             STATUS="❌ FAILED"
           else
             STATUS="✅ PASSED"
           fi
 
+          echo "STATUS=$STATUS" >> $GITHUB_ENV
+
+          echo "Parsed results:"
+          echo "Total: $TOTAL"
+          echo "Passed: $PASSED"
+          echo "Failed: $FAILED"
+          echo "Skipped: $SKIPPED"
+          echo "Duration: $DURATION"
+          echo "Status: $STATUS"
+
+      # --------------------------------------------------
+      # Post Result to Jira (ADF format)
+      # --------------------------------------------------
+      - name: Post result to Jira
+        if: env.ISSUE_KEY != ''
+        run: |
+
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT="${{ github.sha }}"
+          BRANCH="${{ github.ref_name }}"
+          ACTOR="${{ github.actor }}"
 
           echo "Posting results to Jira issue: $ISSUE_KEY"
 
@@ -138,6 +174,24 @@ jobs:
                   {
                     \"type\": \"paragraph\",
                     \"content\": [
+                      {\"type\": \"text\", \"text\": \"Branch: $BRANCH\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Commit: $COMMIT\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
+                      {\"type\": \"text\", \"text\": \"Triggered By: $ACTOR\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"paragraph\",
+                    \"content\": [
                       {
                         \"type\": \"text\",
                         \"text\": \"GitHub Run: $RUN_URL\"
@@ -150,3 +204,12 @@ jobs:
             "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
 
           echo "Jira comment posted successfully."
+
+      # --------------------------------------------------
+      # Fail pipeline if tests failed
+      # --------------------------------------------------
+      - name: Fail workflow if tests failed
+        if: env.FAILED != '0' || env.TOTAL == '0'
+        run: |
+          echo "Tests failed or no tests executed."
+          exit 1
