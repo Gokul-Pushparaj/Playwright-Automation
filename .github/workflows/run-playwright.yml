@@ -92,9 +92,9 @@ jobs:
 
 
     # --------------------------------
-    # Parse results
+    # Parse Results (Correct Logic)
     # --------------------------------
-    - name: Parse results
+    - name: Parse Results
       run: |
 
         PASSED=$(jq -r '.stats.expected // 0' result.json)
@@ -105,10 +105,20 @@ jobs:
 
         TOTAL=$((PASSED + FAILED + SKIPPED + FLAKY))
 
+        echo "TOTAL=$TOTAL" >> $GITHUB_ENV
         echo "PASSED=$PASSED" >> $GITHUB_ENV
         echo "FAILED=$FAILED" >> $GITHUB_ENV
-        echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+        echo "SKIPPED=$SKIPPED" >> $GITHUB_ENV
+        echo "FLAKY=$FLAKY" >> $GITHUB_ENV
         echo "DURATION=$DURATION" >> $GITHUB_ENV
+
+        echo "Parsed values:"
+        echo "Total: $TOTAL"
+        echo "Passed: $PASSED"
+        echo "Failed: $FAILED"
+        echo "Skipped: $SKIPPED"
+        echo "Flaky: $FLAKY"
+        echo "Duration: $DURATION"
 
         if [ "$TOTAL" -eq 0 ]; then
           STATUS="❌ FAILED (NO TESTS)"
