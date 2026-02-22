@@ -73,12 +73,10 @@ jobs:
 
         echo "Running test: $TEST_FILE"
 
-        # Generate JSON report correctly
+        # Generate JSON + HTML reports (CORRECT way)
         npx playwright test "$TEST_FILE" \
-          --reporter=json > result.json || true
-
-        # Generate HTML report
-        npx playwright show-report || true
+          --reporter=json,html \
+          > result.json || true
 
         # Safety fallback
         if [ ! -s result.json ]; then
