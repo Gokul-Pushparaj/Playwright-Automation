@@ -6,7 +6,7 @@ on:
       - 'testscripts/*.spec.ts'
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -18,108 +18,75 @@ jobs:
 
     steps:
 
-    # --------------------------------
+    # -------------------------------------------------
     # Checkout repository
-    # --------------------------------
+    # -------------------------------------------------
     - name: Checkout repository
       uses: actions/checkout@v4
 
 
-    # --------------------------------
+    # -------------------------------------------------
     # Setup Node
-    # --------------------------------
+    # -------------------------------------------------
     - name: Setup Node
       uses: actions/setup-node@v4
       with:
         node-version: 20
 
 
-    # --------------------------------
+    # -------------------------------------------------
     # Install dependencies
-    # --------------------------------
+    # -------------------------------------------------
     - name: Install dependencies
       run: npm install
 
 
-    # --------------------------------
-    # Install Playwright Browsers
-    # --------------------------------
+    # -------------------------------------------------
+    # Install Playwright browsers
+    # -------------------------------------------------
     - name: Install Playwright Browsers
       run: npx playwright install --with-deps
 
 
-    # --------------------------------
-    # Find latest generated test file
-    # --------------------------------
-    - name: Get latest test file
-      run: |
-        LATEST_TEST=$(ls -t testscripts/*.spec.ts | head -n 1)
-        echo "LATEST_TEST=$LATEST_TEST" >> $GITHUB_ENV
-        echo "Latest test file: $LATEST_TEST"
-
-
-    # --------------------------------
-    # Run Playwright test
-    # --------------------------------
-    - name: Run Playwright tests
+    # -------------------------------------------------
+    # Detect latest Jira test file
+    # -------------------------------------------------
+    - name: Detect Latest Test File
+      id: detect
       run: |
 
-        echo "Running Playwright test: $LATEST_TEST"
+        FILE=$(ls -t testscripts/*.spec.ts | head -n 1)
 
-        npx playwright test "$LATEST_TEST" \
+        ISSUE_KEY=$(basename "$FILE" | grep -oE '[A-Z]+-[0-9]+')
+
+        echo "TEST_FILE=$FILE" >> $GITHUB_ENV
+        echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+
+        echo "Latest Test File: $FILE"
+        echo "Issue Key: $ISSUE_KEY"
+
+
+    # -------------------------------------------------
+    # Run ONLY latest test
+    # -------------------------------------------------
+    - name: Run Playwright Test
+      run: |
+
+        echo "Running test: $TEST_FILE"
+
+        npx playwright test "$TEST_FILE" \
           --reporter=json,html \
           --output=test-results \
-          > result.json || true
+          || true
 
-        # fallback result.json
         if [ ! -f result.json ]; then
           echo '{"stats":{"expected":0,"unexpected":0,"skipped":0,"flaky":0,"duration":0}}' > result.json
         fi
 
 
-    # --------------------------------
-    # Upload artifacts (screenshots, videos, traces)
-    # --------------------------------
-    - name: Upload Test Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: playwright-artifacts
-        path: |
-          playwright-report/
-          test-results/
-          result.json
-        retention-days: 30
-
-
-    # --------------------------------
-    # Publish Playwright report to GitHub Pages
-    # --------------------------------
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: playwright-report
-
-
-    - name: Deploy to GitHub Pages
-      uses: actions/deploy-pages@v4
-
-
-    # --------------------------------
-    # Extract Issue Key
-    # --------------------------------
-    - name: Extract Issue Key
-      run: |
-
-        ISSUE_KEY=$(basename "$LATEST_TEST" | grep -oE '[A-Z]+-[0-9]+')
-
-        echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
-
-        echo "Issue Key: $ISSUE_KEY"
-
-
-    # --------------------------------
+    # -------------------------------------------------
     # Parse Results
-    # --------------------------------
+    # -------------------------------------------------
     - name: Parse Results
       run: |
 
@@ -134,11 +101,10 @@ jobs:
         echo "TOTAL=$TOTAL" >> $GITHUB_ENV
         echo "PASSED=$PASSED" >> $GITHUB_ENV
         echo "FAILED=$FAILED" >> $GITHUB_ENV
-        echo "SKIPPED=$SKIPPED" >> $GITHUB_ENV
         echo "DURATION=$DURATION" >> $GITHUB_ENV
 
         if [ "$TOTAL" -eq 0 ]; then
-          STATUS="❌ FAILED (NO TESTS EXECUTED)"
+          STATUS="❌ FAILED (NO TESTS)"
         elif [ "$FAILED" -gt 0 ]; then
           STATUS="❌ FAILED"
         else
@@ -147,25 +113,59 @@ jobs:
 
         echo "STATUS=$STATUS" >> $GITHUB_ENV
 
-        echo "Status: $STATUS"
+
+    # -------------------------------------------------
+    # Prepare GitHub Pages folder per Jira Story
+    # -------------------------------------------------
+    - name: Prepare Pages Content
+      run: |
+
+        mkdir -p pages/$ISSUE_KEY
+
+        cp -r playwright-report/* pages/$ISSUE_KEY/
 
 
-    # --------------------------------
-    # Generate GitHub Pages Report URL
-    # --------------------------------
+    # -------------------------------------------------
+    # Deploy to GitHub Pages (gh-pages branch)
+    # -------------------------------------------------
+    - name: Deploy Report to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./pages
+        publish_branch: gh-pages
+        keep_files: true
+
+
+    # -------------------------------------------------
+    # Generate Report URL
+    # -------------------------------------------------
     - name: Generate Report URL
       run: |
 
-        REPORT_URL="https://${{ github.repository_owner }}.github.io/$(echo '${{ github.repository }}' | cut -d'/' -f2)/"
+        REPORT_URL="https://${{ github.repository_owner }}.github.io/Playwright-Automation/$ISSUE_KEY/index.html"
 
         echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
 
         echo "Report URL: $REPORT_URL"
 
 
-    # --------------------------------
-    # Post Enterprise Comment to Jira
-    # --------------------------------
+    # -------------------------------------------------
+    # Upload Artifacts (optional backup)
+    # -------------------------------------------------
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: playwright-artifacts-${{ env.ISSUE_KEY }}
+        path: |
+          playwright-report/
+          test-results/
+          result.json
+
+
+    # -------------------------------------------------
+    # Post Results to Jira
+    # -------------------------------------------------
     - name: Post Results to Jira
       if: env.ISSUE_KEY != ''
       run: |
@@ -186,7 +186,7 @@ jobs:
                 \"content\": [
                   {
                     \"type\": \"text\",
-                    \"text\": \"🤖 AI Automation Execution Result: $STATUS\"
+                    \"text\": \"🤖 AI Automation Result: $STATUS\"
                   }
                 ]
               },
@@ -194,35 +194,10 @@ jobs:
               {
                 \"type\": \"paragraph\",
                 \"content\": [
-                  {\"type\":\"text\",\"text\":\"Tested Story: $ISSUE_KEY\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Total Tests: $TOTAL\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Passed: $PASSED\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Failed: $FAILED\"}
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\":\"text\",\"text\":\"Execution Time: $DURATION ms\"}
+                  {
+                    \"type\": \"text\",
+                    \"text\": \"Issue: $ISSUE_KEY\"
+                  }
                 ]
               },
 
@@ -230,8 +205,28 @@ jobs:
                 \"type\": \"paragraph\",
                 \"content\": [
                   {
-                    \"type\":\"text\",
-                    \"text\":\"📊 View Full Playwright Report: $REPORT_URL\"
+                    \"type\": \"text\",
+                    \"text\": \"Total: $TOTAL | Passed: $PASSED | Failed: $FAILED\"
+                  }
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {
+                    \"type\": \"text\",
+                    \"text\": \"Execution Time: $DURATION ms\"
+                  }
+                ]
+              },
+
+              {
+                \"type\": \"paragraph\",
+                \"content\": [
+                  {
+                    \"type\": \"text\",
+                    \"text\": \"📊 View Full Report: $REPORT_URL\"
                   }
                 ]
               }
@@ -243,9 +238,9 @@ jobs:
         "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
 
 
-    # --------------------------------
-    # Fail workflow if tests failed
-    # --------------------------------
-    - name: Fail workflow if tests failed
+    # -------------------------------------------------
+    # Fail workflow if failed
+    # -------------------------------------------------
+    - name: Fail if tests failed
       if: env.FAILED != '0' || env.TOTAL == '0'
       run: exit 1
