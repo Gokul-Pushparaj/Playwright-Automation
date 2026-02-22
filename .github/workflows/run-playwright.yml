@@ -11,6 +11,8 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    timeout-minutes: 30
+
     permissions:
       contents: write
       pages: write
@@ -38,7 +40,7 @@ jobs:
     # Install dependencies
     # --------------------------------
     - name: Install dependencies
-      run: npm install
+      run: npm ci
 
 
     # --------------------------------
@@ -49,7 +51,7 @@ jobs:
 
 
     # --------------------------------
-    # Detect latest test file
+    # Detect latest test file (deterministic)
     # --------------------------------
     - name: Detect latest test file
       run: |
@@ -61,39 +63,26 @@ jobs:
         echo "TEST_FILE=$TEST_FILE" >> $GITHUB_ENV
         echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
 
-        echo "Detected test file: $TEST_FILE"
+        echo "Detected:"
+        echo "Test file: $TEST_FILE"
         echo "Issue key: $ISSUE_KEY"
 
 
     # --------------------------------
-    # Run Playwright test (FIXED)
+    # Run Playwright test (correct + deterministic)
     # --------------------------------
     - name: Run Playwright test
       run: |
 
-        echo "Running test: $TEST_FILE"
+        echo "Running test..."
 
-        # Generate JSON + HTML reports (CORRECT way)
         npx playwright test "$TEST_FILE" \
           --reporter=json,html \
+          --workers=1 \
+          --timeout=60000 \
           > result.json || true
 
-        # Safety fallback
-        if [ ! -s result.json ]; then
-
-          echo '{
-            "stats": {
-              "expected": 0,
-              "unexpected": 0,
-              "skipped": 0,
-              "flaky": 0,
-              "duration": 0
-            }
-          }' > result.json
-
-        fi
-
-        echo "Result.json contents:"
+        echo "Result.json:"
         cat result.json
 
 
@@ -112,16 +101,16 @@ jobs:
 
 
     # --------------------------------
-    # Parse Results (FIXED)
+    # Parse Results (enterprise-safe)
     # --------------------------------
     - name: Parse Results
       run: |
 
-        PASSED=$(jq -r '.stats.expected' result.json)
-        FAILED=$(jq -r '.stats.unexpected' result.json)
-        SKIPPED=$(jq -r '.stats.skipped' result.json)
-        FLAKY=$(jq -r '.stats.flaky' result.json)
-        DURATION=$(jq -r '.stats.duration' result.json)
+        PASSED=$(jq -r '.stats.expected // 0' result.json)
+        FAILED=$(jq -r '.stats.unexpected // 0' result.json)
+        SKIPPED=$(jq -r '.stats.skipped // 0' result.json)
+        FLAKY=$(jq -r '.stats.flaky // 0' result.json)
+        DURATION=$(jq -r '.stats.duration // 0' result.json)
 
         TOTAL=$((PASSED + FAILED + SKIPPED + FLAKY))
 
@@ -131,14 +120,6 @@ jobs:
         echo "SKIPPED=$SKIPPED" >> $GITHUB_ENV
         echo "FLAKY=$FLAKY" >> $GITHUB_ENV
         echo "DURATION=$DURATION" >> $GITHUB_ENV
-
-        echo "Parsed values:"
-        echo "Total: $TOTAL"
-        echo "Passed: $PASSED"
-        echo "Failed: $FAILED"
-        echo "Skipped: $SKIPPED"
-        echo "Flaky: $FLAKY"
-        echo "Duration: $DURATION"
 
         if [ "$TOTAL" -eq 0 ]; then
           STATUS="❌ FAILED (NO TESTS)"
@@ -150,11 +131,13 @@ jobs:
 
         echo "STATUS=$STATUS" >> $GITHUB_ENV
 
+        echo "STATUS: $STATUS"
+
 
     # --------------------------------
-    # Deploy Playwright report to GitHub Pages
+    # Deploy report to GitHub Pages
     # --------------------------------
-    - name: Deploy report to GitHub Pages
+    - name: Deploy report
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -166,102 +149,132 @@ jobs:
     # --------------------------------
     # Generate Pages URL
     # --------------------------------
-    - name: Generate Pages URL
+    - name: Generate Report URL
       run: |
 
         REPORT_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${ISSUE_KEY}/index.html"
 
         echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
 
-        echo "Report URL: $REPORT_URL"
+        echo "Report URL:"
+        echo "$REPORT_URL"
 
 
     # --------------------------------
-    # Post Results to Jira (Enterprise)
+    # Post Jira Comment
     # --------------------------------
     - name: Post Results to Jira
-      if: env.ISSUE_KEY != ''
       run: |
 
         curl -X POST \
-        -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
-        -H "Accept: application/json" \
-        -H "Content-Type: application/json" \
-        --data "{
+          -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          --data "{
+            \"body\": {
+              \"type\": \"doc\",
+              \"version\": 1,
+              \"content\": [
 
-          \"body\": {
-            \"type\": \"doc\",
-            \"version\": 1,
-            \"content\": [
+                {
+                  \"type\": \"heading\",
+                  \"attrs\": {\"level\": 3},
+                  \"content\": [
+                    {\"type\": \"text\", \"text\": \"🤖 AI Automation Execution Report\"}
+                  ]
+                },
 
-              {
-                \"type\": \"heading\",
-                \"attrs\": {\"level\": 3},
-                \"content\": [
-                  {\"type\": \"text\", \"text\": \"🤖 AI Automation Execution Report\"}
-                ]
-              },
+                {
+                  \"type\": \"paragraph\",
+                  \"content\": [
+                    {\"type\": \"text\", \"text\": \"Issue: $ISSUE_KEY\"}
+                  ]
+                },
 
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\": \"text\", \"text\": \"Issue: $ISSUE_KEY\"}
-                ]
-              },
+                {
+                  \"type\": \"paragraph\",
+                  \"content\": [
+                    {\"type\": \"text\", \"text\": \"Execution Status: $STATUS\"}
+                  ]
+                },
 
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\": \"text\", \"text\": \"Test File: $TEST_FILE\"}
-                ]
-              },
+                {
+                  \"type\": \"paragraph\",
+                  \"content\": [
+                    {
+                      \"type\": \"text\",
+                      \"text\": \"Total: $TOTAL | Passed: $PASSED | Failed: $FAILED\"
+                    }
+                  ]
+                },
 
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {\"type\": \"text\", \"text\": \"Execution Status: $STATUS\"}
-                ]
-              },
+                {
+                  \"type\": \"paragraph\",
+                  \"content\": [
+                    {
+                      \"type\": \"text\",
+                      \"text\": \"Execution Time: $DURATION ms\"
+                    }
+                  ]
+                },
 
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {
-                    \"type\": \"text\",
-                    \"text\": \"Total: $TOTAL | Passed: $PASSED | Failed: $FAILED | Skipped: $SKIPPED\"
-                  }
-                ]
-              },
+                {
+                  \"type\": \"paragraph\",
+                  \"content\": [
+                    {
+                      \"type\": \"text\",
+                      \"text\": \"📊 Full Report: $REPORT_URL\"
+                    }
+                  ]
+                }
 
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {
-                    \"type\": \"text\",
-                    \"text\": \"Execution Time: $DURATION ms\"
-                  }
-                ]
-              },
-
-              {
-                \"type\": \"paragraph\",
-                \"content\": [
-                  {
-                    \"type\": \"text\",
-                    \"text\": \"📊 View Full Execution Report: $REPORT_URL\"
-                  }
-                ]
-              }
-
-            ]
-          }
-
-        }" \
-        "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
+              ]
+            }
+          }" \
+          "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/comment"
 
 
     # --------------------------------
-    # Fail workflow only if tests failed
+    # Transition Jira → DONE if passed
+    # --------------------------------
+    - name: Transition Jira to Done
+      if: env.FAILED == '0' && env.TOTAL != '0'
+      run: |
+
+        echo "Transitioning Jira to Done"
+
+        curl -X POST \
+          -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          --data '{
+            "transition": {
+              "id": "31"
+            }
+          }' \
+          "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/transitions"
+
+
+    # --------------------------------
+    # Transition Jira → In Progress if failed
+    # --------------------------------
+    - name: Transition Jira to In Progress
+      if: env.FAILED != '0'
+      run: |
+
+        echo "Transitioning Jira to In Progress"
+
+        curl -X POST \
+          -u "${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          --data '{
+            "transition": {
+              "id": "21"
+            }
+          }' \
+          "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${ISSUE_KEY}/transitions"
+
+
+    # --------------------------------
+    # Fail workflow if tests failed
     # --------------------------------
     - name: Fail workflow
       if: env.FAILED != '0'
